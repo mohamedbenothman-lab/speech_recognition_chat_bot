@@ -162,3 +162,13 @@ Mean and standard deviation are both computed across time frames, giving a riche
 - The `static/` folder is created automatically on first run.
 - NLTK data (`punkt`, `wordnet`) is downloaded automatically on startup.
 - If no model files are found, run `training_chat_bot.py` first.
+
+## About
+
+This project is a direct, hands-on application of the Natural Language Processing 
+concepts I studied at university. It started as a way to put theory into practice — 
+combining speech recognition, ML-based intent classification, and text processing 
+into one working system.
+
+The project is still a work in progress. I actively improve and expand it as I 
+learn more, so expect it to keep evolving.
