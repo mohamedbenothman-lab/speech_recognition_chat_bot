@@ -1,0 +1,12 @@
+streamlit
+numpy
+speech_recognition
+matplotlib
+scipy
+gTTS
+librosa
+soundfile
+joblib
+nltk
+sounddevice
+scikit-learn
