@@ -1,4 +1,4 @@
-# 🗣️ Voice-Enabled AI Assistant Chatbot
+#  Voice-Enabled AI Assistant Chatbot
 
 A Streamlit-based voice and text chatbot that uses a trained ML model (SVM or Random Forest) to classify spoken commands, combined with NLTK-based text intent detection and Google Text-to-Speech responses.
 
@@ -65,7 +65,7 @@ enableStaticServing = true
 
 ---
 
-## 🏋️ Training the Model
+## Training the Model
 
 Run the training script **before** launching the app. This will:
 - Extract MFCC + chroma + spectral contrast features from all audio files
@@ -84,7 +84,7 @@ Recognized command words: `yes`, `no`, `up`, `down`, `left`, `right`, `on`, `sto
 
 ---
 
-## 🚀 Running the App
+## Running the App
 
 ```bash
 streamlit run code_02_chatbot.py
@@ -94,7 +94,7 @@ Then open [http://localhost:8501](http://localhost:8501) in your browser.
 
 ---
 
-## 🤖 How It Works
+## How It Works
 
 ### Voice Input (ML Model)
 1. Click **🎤 Record** — the app listens via your microphone for up to 10 seconds.
@@ -137,7 +137,7 @@ Mean and standard deviation are both computed across time frames, giving a riche
 
 ---
 
-## 📦 Dependencies
+## Dependencies
 
 | Package           | Purpose                              |
 |-------------------|--------------------------------------|
@@ -156,7 +156,7 @@ Mean and standard deviation are both computed across time frames, giving a riche
 
 ---
 
-## 📝 Notes
+## Notes
 
 - A working **internet connection** is required for Google Speech Recognition (`speech_recognition`) and Google TTS (`gTTS`).
 - The `static/` folder is created automatically on first run.
