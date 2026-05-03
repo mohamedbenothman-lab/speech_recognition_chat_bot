@@ -1,0 +1,340 @@
+# code_02_chatbot.py
+# based on code_10_02_chatbot.py from sas
+# this is a streamlit page
+# NLTK not used at the moment
+# make sure that static files are served, see
+# https://docs.streamlit.io/develop/concepts/configuration/serving-static-files
+import streamlit as st
+import numpy as np
+import speech_recognition as sr
+import base64
+import io # Used to handle the audio file in memory
+import matplotlib.pyplot as plt
+from scipy.io import wavfile
+from gtts import gTTS
+import os
+import joblib
+import librosa
+import soundfile as sf #this is an alternative for the direct access to audio data
+import nltk
+from nltk.tokenize import word_tokenize
+from nltk.stem import WordNetLemmatizer
+
+nltk.download('punkt')
+nltk.download('wordnet')
+timer_grammar = nltk.CFG.fromstring("""
+  S -> Action Item Prep Quantity Unit
+  Action -> 'set' | 'start' | 'make'
+  Item -> 'alarm' | 'countdown'
+  Prep -> 'for' | 'at'
+  Quantity -> 'one' | 'two' | 'five' | 'ten'
+  Unit -> 'minute' | 'minutes' | 'second' | 'seconds'
+""")
+AUDIO_DATA , SAMPLE_RATE = sf.read("./speech_commands_v0.02/yes/0a7c2a8d_nohash_0.wav")
+#loading the ML components
+MODEL = joblib.load("best_model.joblib")
+ENCODER = joblib.load("label_encoder.joblib")
+SCALER = joblib.load("dataset_cache.joblib")[5]
+
+# Play audio file in streamlit but if we want to use it in jupyter we need to write it like this 
+# Audio(data=audio_data, rate=sample_rate) 
+st.audio(data= AUDIO_DATA, rate=SAMPLE_RATE)
+
+os.makedirs("./static", exist_ok=True)
+# Helper function to extract features (must be consistent with training)
+def extract_features(words):
+    features = {}
+    for word in words:
+        features[f'has({word.lower()})'] = True
+    return features
+def parse_timer_request(text):
+    tokens = nltk.word_tokenize(text.lower())
+    # Find where the command starts (e.g., skip "please")
+    # This is a simple way to help the CFG match the tokens
+    trigger_words = {'set', 'start', 'make'}
+    start_index = next((i for i, word in enumerate(tokens) if word in trigger_words), None)
+    
+    if start_index is not None:
+        relevant_tokens = tokens[start_index : start_index + 6]
+        parser = nltk.ChartParser(timer_grammar)
+        try:
+            for tree in parser.parse(relevant_tokens):
+                # Now the indexing is safe relative to the start of the match
+                quantity = relevant_tokens[3] 
+                unit = relevant_tokens[4]
+                return f"Starting a {quantity} {unit} timer."
+        except:
+            return None
+    return None
+
+#We need to extract MFCCs so the code can predict correctly.
+def extract_mfccs(audio_path, sr = 16000, n_mfcc= 13, hop_length = 512, n_fft=2048):
+    """
+    Extracts a rich, fixed-length feature vector from a WAV file.
+
+    Features included
+    -----------------
+    • MFCCs  (n_mfcc coefficients)
+    • Delta-MFCCs  (first derivative)
+    • Delta²-MFCCs (second derivative)
+    • Chroma (12 pitch-class energies)
+    • Spectral contrast (7 bands)
+    • Zero-crossing rate (1 value)
+
+    For every feature *matrix* we compute both the mean AND the standard
+    deviation across time, so the model sees both the average shape and
+    how much the signal varies — much more discriminative than mean alone.
+
+    Returns
+    -------
+    numpy.ndarray: 1-D feature vector (length ≈ 2 × (n_mfcc×3 + 12 + 7 + 1))
+    """
+    audio, _ = librosa.load(audio_path, sr=sr)
+
+    # --- MFCCs and their derivatives ---
+    mfccs       = librosa.feature.mfcc(y=audio, sr=sr, n_mfcc=n_mfcc,
+                                       n_fft=n_fft, hop_length=hop_length)
+    mfcc_delta  = librosa.feature.delta(mfccs)
+    mfcc_delta2 = librosa.feature.delta(mfccs, order=2)
+
+    # --- Supplementary features ---
+    chroma   = librosa.feature.chroma_stft(y=audio, sr=sr,
+                                           n_fft=n_fft, hop_length=hop_length)
+    contrast = librosa.feature.spectral_contrast(y=audio, sr=sr,
+                                                 n_fft=n_fft, hop_length=hop_length)
+    zcr      = librosa.feature.zero_crossing_rate(audio, hop_length=hop_length)
+
+    # Stack into one matrix, then summarise with mean + std
+    combined = np.vstack([mfccs, mfcc_delta, mfcc_delta2, chroma, contrast, zcr])
+
+    mean_vec = np.mean(combined, axis=1)   # shape: (n_features,)
+    std_vec  = np.std(combined,  axis=1)   # shape: (n_features,)
+
+    return np.concatenate([mean_vec, std_vec])   # double the info vs. mean alone
+def listen_and_transcribe():
+    r = sr.Recognizer()
+    st.info("Listening... Speak now.")
+    
+    with sr.Microphone() as source:
+        r.adjust_for_ambient_noise(source, duration=0.5)
+        
+        try:
+            audio = r.listen(source, timeout=5, phrase_time_limit=10)
+            with open("./static/input.wav", "wb") as f:
+                f.write(audio.get_wav_data())
+        except sr.WaitTimeoutError:
+            st.error("No speech detected within the timeout limit.")
+            return None
+    # Visualise the recorded audio as a spectrogram and return it as base64 HTML
+    st.info("Visualising ...")
+    image_html = None
+    try:
+        sample_rate, data = wavfile.read("./static/input.wav")
+        # If stereo, use first channel
+        if data.ndim > 1:
+            data = data[:, 0]
+        # First figure: waveform
+        fig1, ax1 = plt.subplots()
+        times = np.arange(len(data)) / float(sample_rate)
+        ax1.plot(times, data)
+        ax1.set_title("Waveform")
+        ax1.set_xlabel("Time [s]")
+        ax1.set_ylabel("Amplitude")
+
+        buf1 = io.BytesIO()
+        fig1.savefig(buf1, format="png", bbox_inches='tight')
+        plt.close(fig1)
+        buf1.seek(0)
+        img1_b64 = base64.b64encode(buf1.read()).decode('ascii')
+        waveform_html = f'<img src="data:image/png;base64,{img1_b64}" alt="waveform" style="max-width:100%;">'
+
+        # Second figure: spectrogram
+        fig2, ax2 = plt.subplots()
+        ax2.specgram(data, Fs=sample_rate)
+        ax2.set_title("Recorded Audio Spectrogram")
+
+        buf2 = io.BytesIO()
+        fig2.savefig(buf2, format="png", bbox_inches='tight')
+        plt.close(fig2)
+        buf2.seek(0)
+        img2_b64 = base64.b64encode(buf2.read()).decode('ascii')
+        spectrogram_html = f'<img src="data:image/png;base64,{img2_b64}" alt="spectrogram" style="max-width:100%;">'
+
+        # Combine: waveform first, then spectrogram
+        image_html = waveform_html + "<br>" + spectrogram_html
+    except Exception as e:
+        st.warning(f"Could not generate spectrogram: {e}")
+
+    # Transcribe audio
+    text = None
+    try:
+        text = r.recognize_google(audio)
+    except sr.UnknownValueError:
+        st.error("Could not understand audio.")
+    except sr.RequestError as e:
+        st.error(f"Could not request results from speech recognition service; {e}")
+
+    # Return both transcription text and image HTML so caller can persist the image
+    return {"text": text, "image_html": image_html}
+
+# --- 2. TTS/Audio Handling  (IMPLEMENTATION) ---
+def text_to_audio_for_web(text):
+    """
+    Saves audio to disk AND returns an embedded HTML audio player.
+    """
+    try:
+        tts = gTTS(text=text, lang='en')
+        
+        # Generate audio in memory
+        buf = io.BytesIO()
+        tts.write_to_fp(buf)
+        buf.seek(0)
+        audio_bytes = buf.read()
+
+        # Save to disk
+        with open("./static/output.mp3", "wb") as f:
+            f.write(audio_bytes)
+        print("Audio saved to ./static/output.mp3")
+
+        # Also embed as base64 for reliable in-browser playback
+        audio_b64 = base64.b64encode(audio_bytes).decode('ascii')
+        return f"""
+        <audio controls autoplay style="width: 100%;">
+            <source src="data:audio/mp3;base64,{audio_b64}" type="audio/mp3">
+        </audio>
+        """
+    except Exception as e:
+        st.error(f"TTS Error: Could not generate audio. Details: {e}")
+        return None
+
+
+# --- 3. Assistant Core Logic ---
+
+def assistant_action(intent):
+    """Maps the recognized intent to a specific action/response."""
+    actions = {
+        "get_weather": "I'm checking the forecast for your location now. Expect sunny skies!",
+        "control_lights": "Acknowledged. The requested light controls have been executed.",
+        "set_timer": "Starting a timer. I'll let you know when time is up!",
+        "tell_joke": "What do you call a fake noodle? An impasta!",
+        "greet": "Hello! I am your AI assistant. How can I help you today?",
+    }
+    return actions.get(intent, "I'm sorry, I don't know how to handle that request yet. Try asking me about the weather or a joke.")
+
+# --- 4. Streamlit App Layout and Logic ---
+
+st.title("🗣️ Voice-Enabled AI Assistant Chat")
+st.markdown("Use the **text input** or the **Start Voice Input** button to interact.")
+
+# Initialize chat history in session state
+if "messages" not in st.session_state:
+    st.session_state.messages = []
+
+# Display chat messages from history
+for message in st.session_state.messages:
+    with st.chat_message(message["role"]):
+        st.markdown(message["content"])
+        # Show spectrogram image if present
+        if message.get("image_html"):
+            st.markdown(message.get("image_html"), unsafe_allow_html=True)
+        if message["audio_html"]:
+            st.markdown(message["audio_html"], unsafe_allow_html=True) 
+# Detects the promps of the msg
+
+def detect_intent(audio_path):
+    try:
+        # 1. Extract features from the recorded wav file
+        features = extract_mfccs(audio_path)
+        
+        # 2. Scale features
+        features_scaled = SCALER.transform(features)
+        
+        # 3. Predict
+        prediction_idx = MODEL.predict(features_scaled)[0]
+        intent = ENCODER.inverse_transform([prediction_idx])[0]
+        
+        return intent
+    except Exception as e:
+        st.error(f"Prediction Error: {e}")
+        return "unknown"
+
+def clean_text_nltk(text):
+    lemmatizer = WordNetLemmatizer()
+    # 1. Tokenize (Slide 16 logic)
+    tokens = word_tokenize(text.lower())
+    # 2. Lemmatize (e.g., "lights" -> "light")
+    return [lemmatizer.lemmatize(w) for w in tokens]
+
+# Function to handle processing of any prompt (text or voice)
+def handle_prompt(prompt, image_html=None, is_voice=False):
+    if not prompt:
+        return
+
+    # 1. Display User Message
+    st.session_state.messages.append({"role": "user", "content": prompt, "audio_html": None, "image_html": image_html})
+    with st.chat_message("user"):
+        st.markdown(prompt)
+        if image_html:
+            st.markdown(image_html, unsafe_allow_html=True)
+
+    # 2. Recognize Intent
+    if is_voice:
+        # Use your Random Forest Model for voice
+        intent = detect_intent("./static/input.wav")
+    else:
+        # Use NLTK logic for typed text
+        timer_response = parse_timer_request(prompt)
+        if timer_response:
+            response_text = timer_response
+            intent = "set_timer"
+        else:
+            tokens = clean_text_nltk(prompt)
+            if "weather" in tokens: intent = "get_weather"
+            elif "light" in tokens: intent = "control_lights"
+            elif "timer" in tokens: intent = "set_timer"
+            elif "joke" in tokens: intent = "tell_joke"
+            else: intent = "greet"
+
+    # 3. Action and Audio
+    response_text = assistant_action(intent)
+    audio_html = text_to_audio_for_web(response_text)
+
+    # 4. Display Assistant Response
+    with st.chat_message("assistant"):
+        st.markdown(response_text)
+        if audio_html:
+            st.markdown(audio_html, unsafe_allow_html=True)
+        st.caption(f"**Method:** {'ML Model' if is_voice else 'NLTK Analysis'} | **Intent:** `{intent}`")
+
+    st.session_state.messages.append({
+        "role": "assistant", 
+        "content": response_text, 
+        "audio_html": audio_html.replace("autoplay", "") if audio_html else None
+    })
+
+col1, col2 = st.columns([1, 4])
+# --- Voice Input Trigger ---
+with col1:
+    # --- Voice Input Trigger ---
+    if st.button("🎤 Record"):
+        with st.spinner("Listening..."):
+            voice_result = listen_and_transcribe()
+
+        if voice_result:
+            text = voice_result.get("text")
+            image_html = voice_result.get("image_html")
+            
+            # Use 'is_voice=True' so it uses your Random Forest Model
+            if text:
+                handle_prompt(text, image_html=image_html, is_voice=True)
+            else:
+                handle_prompt("(audio command)", image_html=image_html, is_voice=True)
+            
+            st.rerun()
+
+with col2:
+    # --- Text Input Handler ---
+    # Using chat_input for a modern look
+    if prompt := st.chat_input("Type a message..."):
+        # Use 'is_voice=False' (default) so it uses NLTK to clean the text
+        handle_prompt(prompt, is_voice=False)
