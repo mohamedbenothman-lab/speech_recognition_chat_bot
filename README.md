@@ -31,7 +31,7 @@ A Streamlit-based voice and text chatbot that uses a trained ML model (SVM or Ra
 ### 1. Clone / download the project
 
 ```bash
-git clone <your-repo-url>
+git clone https://github.com/mohamedbenothman-lab/speech_recognition_chat_bot
 cd <project-folder>
 ```
 
