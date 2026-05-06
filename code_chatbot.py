@@ -1,9 +1,4 @@
-# code_02_chatbot.py
-# based on code_10_02_chatbot.py from sas
-# this is a streamlit page
-# NLTK not used at the moment
-# make sure that static files are served, see
-# https://docs.streamlit.io/develop/concepts/configuration/serving-static-files
+
 import streamlit as st
 import numpy as np
 import speech_recognition as sr
